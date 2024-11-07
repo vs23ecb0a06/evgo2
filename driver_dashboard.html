@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <title>Driver Dashboard - EVGO</title>
+    <style>
+        body {
+            background-color: #1a202c;
+            color: #fff;
+        }
+
+        .navbar {
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logout-button {
+            background-color: #e63946;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+        }
+
+        .logout-button:hover {
+            background-color: #d62828;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+            border-radius: 0.5rem;
+        }
+
+        .sidebar {
+            width: 300px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            height: calc(100% - 4rem);
+            overflow-y: auto;
+        }
+
+        .request-status {
+            padding: 1rem;
+            background-color: #4CAF50;
+            color: white;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .clear-button {
+            background-color: #e63946;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-weight: bold;
+            width: 100%;
+        }
+
+        .clear-button:hover {
+            background-color: #d62828;
+        }
+    </style>
+    <!-- Mapbox GL JS -->
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+</head>
+
+<body class="flex flex-col h-screen">
+    <nav class="navbar">
+        <div class="text-lg font-bold">EVGO Driver Dashboard</div>
+        <button id="logout-button" class="logout-button">Logout</button>
+    </nav>
+
+    <div class="flex flex-grow">
+        <div class="sidebar mr-4">
+            <h1 class="text-xl mb-4">Pending Requests</h1>
+            <div id="request-status" class="request-status">No new EV requests.</div>
+            <div id="request-list" class="mb-4"></div>
+            <button onclick="clearRequest()" class="clear-button">Clear Request</button>
+        </div>
+        <div class="flex-grow">
+            <div id="map" class="mt-4"></div>
+        </div>
+    </div>
+
+    <script>
+        // Mapbox setup
+        mapboxgl.accessToken = 'pk.eyJ1Ijoic3JmNzQiLCJhIjoiY20ybmloMzZjMDZiazJsc2JzYzd0N3BlZCJ9.PiZbA2KPbswlHrWs2B4yKw';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/streets-v11',
+            zoom: 14
+        });
+
+        setInterval(() => {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((position) => {
+                    driverLocation = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    };
+                    setDriverLocation(driverLocation.latitude, driverLocation.longitude);
+
+                    // Send updated location to the server
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: 'driverLocationUpdate',
+                            location: driverLocation
+                        }));
+                    }
+                });
+            }
+        }, 5000);
+
+        let currentRequest = null;
+        let driverLocation = null;
+        let driverMarker = null;
+        let userMarker = null;
+
+        // Get driver's geolocation
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition((position) => {
+                driverLocation = {
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude
+                };
+                map.flyTo({ center: [driverLocation.longitude, driverLocation.latitude], zoom: 14 });
+                setDriverLocation(driverLocation.latitude, driverLocation.longitude);
+            });
+        } else {
+            alert("Geolocation is not supported by this browser.");
+        }
+
+        function setDriverLocation(lat, lng) {
+            if (!driverMarker) {
+                driverMarker = new mapboxgl.Marker({ color: 'green' })
+                    .setLngLat([lng, lat])
+                    .setPopup(new mapboxgl.Popup().setText('Driver Location'))
+                    .addTo(map);
+            } else {
+                driverMarker.setLngLat([lng, lat]);
+            }
+            map.flyTo({ center: [lng, lat], zoom: 14 });
+        }
+
+        setInterval(() => {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((position) => {
+                    driverLocation = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    };
+                    setDriverLocation(driverLocation.latitude, driverLocation.longitude);
+                });
+            }
+        }, 5000);
+
+        document.getElementById('logout-button').addEventListener('click', function () {
+            fetch('/api/logout', { method: 'POST' })
+                .then(response => {
+                    if (response.ok) {
+                        window.location.href = '/login';
+                        console.log("logged out");
+                    } else {
+                        return response.json().then(data => {
+                            alert("Logout failed: " + data.message);
+                        });
+                    }
+                });
+        });
+
+        function clearRequest() {
+            if (currentRequest) {
+                currentRequest = null;
+                document.getElementById("request-list").innerHTML = "Request cleared.";
+                document.getElementById("request-status").style.display = 'none';
+                if (map.getLayer('route')) map.removeLayer('route');
+                if (map.getSource('route')) map.removeSource('route');
+            } else {
+                alert("No request to clear.");
+            }
+        }
+
+        function displayRequests() {
+            const requestListDiv = document.getElementById('request-list');
+            requestListDiv.innerHTML = "";
+
+            if (currentRequest) {
+                const userLocation = `Pickup Location: ${currentRequest.pickupLocation}`;
+                const requestElement = document.createElement("div");
+                requestElement.textContent = userLocation;
+                requestElement.className = "text-gray-300 bg-green mb-2";
+                requestListDiv.appendChild(requestElement);
+
+                const requestStatusDiv = document.getElementById('request-status');
+                requestStatusDiv.textContent = `New EV request`;
+                requestStatusDiv.style.display = 'block';
+
+                initializeMap(driverLocation.latitude, driverLocation.longitude, currentRequest.location.latitude, currentRequest.location.longitude);
+            } else {
+                requestListDiv.textContent = "No new requests.";
+                document.getElementById('request-status').style.display = 'none';
+            }
+        }
+
+        function initializeMap(driverLat, driverLng, userLat, userLng) {
+                map.flyTo({ center: [driverLng, driverLat], zoom: 14 });
+
+                if (driverLat && driverLng) {
+                    setDriverLocation(driverLat, driverLng);
+                }
+
+                if (userLat && userLng) {
+                    if (!userMarker) {
+                        userMarker = new mapboxgl.Marker({ color: 'red' })
+                            .setLngLat([userLng, userLat])
+                            .setPopup(new mapboxgl.Popup().setText('User Location'))
+                            .addTo(map);
+                    } else {
+                        userMarker.setLngLat([userLng, userLat]);
+                    }
+
+                    // Call Mapbox Directions API to get the route
+                    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${driverLng},${driverLat};${userLng},${userLat}?access_token=${mapboxgl.accessToken}&alternatives=false&geometries=geojson`;
+
+                    fetch(url)
+                        .then(response => response.json())
+                        .then(data => {
+                            const route = data.routes[0].geometry.coordinates;
+                            if (map.getLayer('route')) map.removeLayer('route');
+                            if (map.getSource('route')) map.removeSource('route');
+
+                            map.addSource('route', {
+                                type: 'geojson',
+                                data: {
+                                    type: 'Feature',
+                                    properties: {},
+                                    geometry: {
+                                        type: 'LineString',
+                                        coordinates: route
+                                    }
+                                }
+                            });
+
+                            map.addLayer({
+                                id: 'route',
+                                type: 'line',
+                                source: 'route',
+                                paint: {
+                                    'line-color': '#3887be',
+                                    'line-width': 5
+                                }
+                            });
+                        })
+                        .catch(error => {
+                            console.error('Error fetching route:', error);
+                        });
+                }
+            }
+
+
+        const socket = new WebSocket('ws://localhost:3000');
+
+        socket.onopen = () => {
+            console.log('Connected to WebSocket server', socket.url);
+            socket.send(JSON.stringify({ type: 'driver' }));
+        };
+
+        socket.onerror = (error) => {
+            console.error('WebSocket Error:', error);
+            alert("WebSocket connection failed. Please check server status.");
+        };
+
+        socket.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                console.log("Received message:", message);
+
+                if (message.type === 'newRequest') {
+                    currentRequest = message;
+                    displayRequests();
+                }
+            } catch (error) {
+                console.error('Error processing WebSocket message:', error);
+            }
+        };
+    </script>
+</body>
+
+</html>
